@@ -4,7 +4,8 @@
 #include <unistd.h>
 
 #define CUDA_AWARE
-#define DEBUG_MODE
+// #define VERY_VERBOSE
+// #define DEBUG_MODE
 #define OFFSET 1
 
 #define DATATYPE int
@@ -22,6 +23,11 @@ __global__ void set_data(DATATYPE* q, int rank, int N){
    if(i < N){
       // q[i] = 1.0*rank + 1.0e-6*i;
       q[i] = 100000*rank + i;
+#ifdef VERY_VERBOSE
+      if(i<5){
+         printf("rank %2d i=%4d q[i]=%d\n", rank, i, q[i]);
+      }
+#endif
    }
 }
 
@@ -79,13 +85,38 @@ void go(int N) {
    MPI_Irecv(d_rdata, N*sizeof(DATATYPE), MPI_BYTE, from, 111, MPI_COMM_WORLD, &reqs[1]);
 #else
    HANDLE_ERROR( cudaMemcpy(h_sdata, d_sdata, N*sizeof(DATATYPE), cudaMemcpyDeviceToHost) );
+
+#ifdef VERY_VERBOSE
+   for(int rank=0; rank<mpi_size; rank++){
+      if(rank==mpi_rank){
+         for(int i=0; i<N; i++){
+            printf("send %2d | %4d %d\n", rank, i, h_sdata[i]);
+         }
+      }
+      MPI_Barrier(MPI_COMM_WORLD);
+   }
+#endif
+   
    MPI_Isend(h_sdata, N*sizeof(DATATYPE), MPI_BYTE,   to, 111, MPI_COMM_WORLD, &reqs[0]);
    MPI_Irecv(h_rdata, N*sizeof(DATATYPE), MPI_BYTE, from, 111, MPI_COMM_WORLD, &reqs[1]);
 #endif
    MPI_Waitall(2, reqs, stats);
 
 #ifndef CUDA_AWARE
-   HANDLE_ERROR( cudaMemcpy(d_rdata, h_rdata, N*sizeof(DATATYPE), cudaMemcpyHostToDevice) );
+
+#ifdef VERY_VERBOSE
+   for(int rank=0; rank<mpi_size; rank++){
+      if(rank==mpi_rank){
+         for(int i=0; i<N; i++){
+            printf("recv %2d | %4d %d\n", rank, i, h_rdata[i]);
+         }
+      }
+      MPI_Barrier(MPI_COMM_WORLD);
+   }
+#endif
+
+   
+   HANDLE_ERROR( cudaMemcpy(d_rdata, h_rdata, N*sizeof(DATATYPE), cudaMemcpyHostToDevice) );   
 #endif
 
    //
@@ -111,6 +142,8 @@ void go(int N) {
       else          printf("Using N=%9d ...failed\n",N);
    }
 
+   MPI_Barrier(MPI_COMM_WORLD);
+
 #ifdef DEBUG_MODE
    printf("Proc %2d has %6d errors\n",mpi_rank, nerr);
 #endif
@@ -127,21 +160,31 @@ int main(int argc, char** argv) {
 
   MPI_Init(&argc, &argv);
 
+  int mpi_rank;
+  MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
+
+  if(mpi_rank == 0){
 #ifdef CUDA_AWARE
-  printf("Attempting CUDA AWARE data transfers...\n");
+     printf("Attempting CUDA AWARE data transfers...\n");
 #else
-  printf("Not CUDA aware...\n");
+     printf("Not CUDA aware...\n");
 #endif
+  }
 
 #ifdef DEBUG_MODE
-  go(1<<20);
+  // go(1<<20);
+  // go(8);
+  go(1<<6);
 #else
   for(int i=5; i<20; i++){
      go(1<<i);
   }
 #endif
 
-  printf("--------------- Finalizing ----------------\n");
+  MPI_Barrier(MPI_COMM_WORLD);
+  if(mpi_rank == 0){
+     printf("--------------- Finalizing ----------------\n");
+  }
 
   MPI_Finalize();
 
